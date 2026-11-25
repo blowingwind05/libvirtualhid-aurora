@@ -54,6 +54,27 @@ namespace lvh::detail::windows_broker {
       return {handle, &::CloseHandle};
     }
 
+    static UniqueServiceHandle make_unique_service_handle(SC_HANDLE handle) {
+      return {handle, &::CloseServiceHandle};
+    }
+
+    /**
+     * @brief Check whether the Windows service manager confirms that the broker is not installed.
+     * @return True only if the service manager reports that the broker does not exist.
+     */
+    static bool broker_service_is_missing() {
+      auto service_manager = make_unique_service_handle(
+        ::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT)
+      );
+      if (!service_manager) {
+        return false;
+      }
+      auto service = make_unique_service_handle(
+        ::OpenServiceW(service_manager.get(), broker_service_name, SERVICE_QUERY_STATUS)
+      );
+      return !service && ::GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST;
+    }
+
     static HANDLE open_broker_pipe() {
       return ::CreateFileA(
         LVH_WINDOWS_BROKER_PIPE_PATH,
@@ -84,24 +105,26 @@ namespace lvh::detail::windows_broker {
 
     static UniqueHandle connect_to_broker_pipe() {
       DWORD last_error = ERROR_FILE_NOT_FOUND;
+      bool checked_service = false;
       for (auto attempt = 0U; attempt < pipe_wait_timeout / pipe_retry_interval; ++attempt) {
         if (HANDLE pipe = open_broker_pipe(); pipe != INVALID_HANDLE_VALUE) {
           return make_unique_handle(pipe);
         }
 
         last_error = ::GetLastError();
+        if (last_error == ERROR_FILE_NOT_FOUND && !checked_service) {
+          checked_service = true;
+          if (broker_service_is_missing()) {
+            break;
+          }
+        }
         if (!wait_to_retry_broker_pipe(last_error)) {
-          ::SetLastError(last_error);
-          return make_unique_handle(INVALID_HANDLE_VALUE);
+          break;
         }
       }
 
       ::SetLastError(last_error);
       return make_unique_handle(INVALID_HANDLE_VALUE);
-    }
-
-    static UniqueServiceHandle make_unique_service_handle(SC_HANDLE handle) {
-      return {handle, &::CloseServiceHandle};
     }
 
     static std::string windows_error_message(DWORD error_code) {

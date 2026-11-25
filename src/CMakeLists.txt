@@ -46,14 +46,20 @@ if(LIBVIRTUALHID_USES_THREADS)
 elseif(WIN32)
     target_sources(${PROJECT_NAME}
       PRIVATE
-      "${PROJECT_SOURCE_DIR}/third-party/lizardbyte-common/src/common/env.cpp"
       "${CMAKE_CURRENT_SOURCE_DIR}/platform/windows/windows_backend.cpp"
       "${CMAKE_CURRENT_SOURCE_DIR}/platform/windows/windows_broker_client.cpp"
       "${CMAKE_CURRENT_SOURCE_DIR}/platform/windows/windows_license.cpp")
     target_include_directories(${PROJECT_NAME}
       PRIVATE
-      "${PROJECT_SOURCE_DIR}/third-party/lizardbyte-common/src/include"
       "${CMAKE_CURRENT_SOURCE_DIR}/platform/windows/shared")
+    if(TARGET lizardbyte::common)
+        target_link_libraries(${PROJECT_NAME} PRIVATE lizardbyte::common)
+    else()
+        target_sources(${PROJECT_NAME} PRIVATE
+          "${PROJECT_SOURCE_DIR}/third-party/lizardbyte-common/src/common/env.cpp")
+        target_include_directories(${PROJECT_NAME} PRIVATE
+          "${PROJECT_SOURCE_DIR}/third-party/lizardbyte-common/src/include")
+    endif()
     target_compile_definitions(${PROJECT_NAME}
       PRIVATE
       NOMINMAX

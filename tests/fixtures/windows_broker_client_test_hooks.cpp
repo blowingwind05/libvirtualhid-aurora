@@ -62,11 +62,16 @@ namespace {
 
   BOOL WINAPI fake_close_service_handle(SC_HANDLE) {
     ++fake_state().closed_service_handles;
+    fake_state().last_error = ERROR_INVALID_HANDLE;
     return TRUE;
   }
 
   DWORD WINAPI fake_get_last_error() {
     return fake_state().last_error;
+  }
+
+  void WINAPI fake_set_last_error(DWORD error) {
+    fake_state().last_error = error;
   }
 
   HANDLE WINAPI fake_create_file_a(
@@ -82,7 +87,10 @@ namespace {
 
     ++fake_state().create_attempts;
     const auto scenario = fake_state().scenario;
-    if ((scenario == pipe_unavailable_once && fake_state().create_attempts == 1U) || scenario == pipe_never_available) {
+    if ((scenario == pipe_unavailable_once && fake_state().create_attempts == 1U) ||
+        scenario == pipe_never_available || scenario == broker_not_installed ||
+        scenario == broker_manager_access_denied || scenario == broker_open_access_denied ||
+        scenario == broker_marked_for_delete) {
       fake_state().last_error = ERROR_FILE_NOT_FOUND;
       return INVALID_HANDLE_VALUE;
     }
@@ -134,17 +142,30 @@ namespace {
   }
 
   SC_HANDLE WINAPI fake_open_service_manager(LPCWSTR, LPCWSTR, DWORD) {
-    if (fake_state().scenario == lvh::detail::test::BrokerServiceScenario::service_manager_failure) {
+    using enum lvh::detail::test::BrokerServiceScenario;
+    if (fake_state().scenario == service_manager_failure || fake_state().scenario == broker_manager_access_denied) {
+      fake_state().last_error = ERROR_ACCESS_DENIED;
       return nullptr;
     }
     return fake_service_manager_handle();
   }
 
   SC_HANDLE WINAPI fake_open_service(SC_HANDLE, LPCWSTR, DWORD) {
-    if (fake_state().scenario == lvh::detail::test::BrokerServiceScenario::service_failure) {
-      return nullptr;
+    using enum lvh::detail::test::BrokerServiceScenario;
+    switch (fake_state().scenario) {
+      case broker_not_installed:
+        fake_state().last_error = ERROR_SERVICE_DOES_NOT_EXIST;
+        return nullptr;
+      case broker_marked_for_delete:
+        fake_state().last_error = ERROR_SERVICE_MARKED_FOR_DELETE;
+        return nullptr;
+      case service_failure:
+      case broker_open_access_denied:
+        fake_state().last_error = ERROR_ACCESS_DENIED;
+        return nullptr;
+      default:
+        return fake_service_handle();
     }
-    return fake_service_handle();
   }
 
   BOOL WINAPI fake_query_service_status(
@@ -197,6 +218,7 @@ namespace {
 #define OpenSCManagerW fake_open_service_manager
 #define OpenServiceW fake_open_service
 #define QueryServiceStatusEx fake_query_service_status
+#define SetLastError fake_set_last_error
 #define SetNamedPipeHandleState fake_set_named_pipe_handle_state
 #define Sleep fake_sleep
 #define TransactNamedPipe fake_transact_named_pipe
@@ -213,6 +235,7 @@ namespace {
 #undef OpenSCManagerW
 #undef OpenServiceW
 #undef QueryServiceStatusEx
+#undef SetLastError
 #undef SetNamedPipeHandleState
 #undef Sleep
 #undef TransactNamedPipe
@@ -245,6 +268,7 @@ namespace lvh::detail::test {
       .create_attempts = fake_state().create_attempts,
       .sleep_attempts = fake_state().sleep_attempts,
       .wait_attempts = fake_state().wait_attempts,
+      .last_error = fake_state().last_error,
       .transacted = fake_state().transacted,
     };
   }

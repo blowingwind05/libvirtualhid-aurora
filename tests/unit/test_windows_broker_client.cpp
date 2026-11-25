@@ -9,6 +9,9 @@
 // test includes
 #include <gtest/gtest.h>
 
+// system includes
+#include <winerror.h>
+
 // standard includes
 #include <string_view>
 
@@ -26,6 +29,7 @@ namespace {
     std::uint32_t create_attempts;
     std::uint32_t sleep_attempts;
     std::uint32_t wait_attempts;
+    std::uint32_t closed_service_handles;
   };
 
 }  // namespace
@@ -68,11 +72,11 @@ TEST(WindowsBrokerClientTest, TransactsOnlyWithRunningInstalledBrokerService) {
 TEST(WindowsBrokerClientTest, RetriesWhileTheBrokerPipeIsBeingRecreated) {
   using enum lvh::detail::test::BrokerServiceScenario;
 
-  for (const auto &[scenario, name, create_attempts, sleep_attempts, wait_attempts] : {
-         PipeCase {pipe_unavailable_once, "missing once", 2U, 1U, 0U},
-         PipeCase {pipe_busy_once, "busy then available", 2U, 0U, 1U},
-         PipeCase {pipe_busy_timeout_once, "busy wait timed out", 2U, 0U, 1U},
-         PipeCase {pipe_busy_disappears_once, "busy pipe disappeared", 2U, 0U, 1U},
+  for (const auto &[scenario, name, create_attempts, sleep_attempts, wait_attempts, closed_service_handles] : {
+         PipeCase {pipe_unavailable_once, "missing once", 2U, 1U, 0U, 4U},
+         PipeCase {pipe_busy_once, "busy then available", 2U, 0U, 1U, 2U},
+         PipeCase {pipe_busy_timeout_once, "busy wait timed out", 2U, 0U, 1U, 2U},
+         PipeCase {pipe_busy_disappears_once, "busy pipe disappeared", 2U, 0U, 1U, 2U},
        }) {
     SCOPED_TRACE(name);
     const auto result =
@@ -83,7 +87,7 @@ TEST(WindowsBrokerClientTest, RetriesWhileTheBrokerPipeIsBeingRecreated) {
     EXPECT_EQ(result.sleep_attempts, sleep_attempts);
     EXPECT_EQ(result.wait_attempts, wait_attempts);
     EXPECT_EQ(result.closed_pipe_handles, 1U);
-    EXPECT_EQ(result.closed_service_handles, 2U);
+    EXPECT_EQ(result.closed_service_handles, closed_service_handles);
     EXPECT_TRUE(result.transacted);
   }
 }
@@ -91,10 +95,10 @@ TEST(WindowsBrokerClientTest, RetriesWhileTheBrokerPipeIsBeingRecreated) {
 TEST(WindowsBrokerClientTest, ReportsBrokerPipeConnectionFailures) {
   using enum lvh::detail::test::BrokerServiceScenario;
 
-  for (const auto &[scenario, name, create_attempts, sleep_attempts, wait_attempts] : {
-         PipeCase {pipe_access_denied, "access denied", 1U, 0U, 0U},
-         PipeCase {pipe_busy_failure, "busy wait failed", 1U, 0U, 1U},
-         PipeCase {pipe_never_available, "retry deadline exhausted", 500U, 500U, 0U},
+  for (const auto &[scenario, name, create_attempts, sleep_attempts, wait_attempts, closed_service_handles] : {
+         PipeCase {pipe_access_denied, "access denied", 1U, 0U, 0U, 0U},
+         PipeCase {pipe_busy_failure, "busy wait failed", 1U, 0U, 1U, 0U},
+         PipeCase {pipe_never_available, "retry deadline exhausted", 500U, 500U, 0U, 2U},
        }) {
     SCOPED_TRACE(name);
     const auto result =
@@ -107,7 +111,29 @@ TEST(WindowsBrokerClientTest, ReportsBrokerPipeConnectionFailures) {
     EXPECT_EQ(result.sleep_attempts, sleep_attempts);
     EXPECT_EQ(result.wait_attempts, wait_attempts);
     EXPECT_EQ(result.closed_pipe_handles, 0U);
-    EXPECT_EQ(result.closed_service_handles, 0U);
+    EXPECT_EQ(result.closed_service_handles, closed_service_handles);
+    EXPECT_FALSE(result.transacted);
+  }
+}
+
+TEST(WindowsBrokerClientTest, SkipsPipeWaitOnlyWhenScmConfirmsBrokerIsMissing) {
+  using enum lvh::detail::test::BrokerServiceScenario;
+
+  for (const auto &[scenario, name, create_attempts, sleep_attempts, wait_attempts, closed_service_handles] : {
+         PipeCase {broker_not_installed, "not installed", 1U, 0U, 0U, 1U},
+         PipeCase {broker_manager_access_denied, "SCM access denied", 500U, 500U, 0U, 0U},
+         PipeCase {broker_open_access_denied, "service access denied", 500U, 500U, 0U, 1U},
+         PipeCase {broker_marked_for_delete, "service marked for deletion", 500U, 500U, 0U, 1U},
+       }) {
+    SCOPED_TRACE(name);
+    const auto result = lvh::detail::test::verify_broker_service_scenario(scenario);
+
+    EXPECT_EQ(result.status.code(), lvh::ErrorCode::backend_unavailable);
+    EXPECT_EQ(result.create_attempts, create_attempts);
+    EXPECT_EQ(result.sleep_attempts, sleep_attempts);
+    EXPECT_EQ(result.wait_attempts, wait_attempts);
+    EXPECT_EQ(result.closed_service_handles, closed_service_handles);
+    EXPECT_EQ(result.last_error, ERROR_FILE_NOT_FOUND);
     EXPECT_FALSE(result.transacted);
   }
 }

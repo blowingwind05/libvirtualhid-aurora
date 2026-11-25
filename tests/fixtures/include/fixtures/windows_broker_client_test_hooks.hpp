@@ -15,6 +15,10 @@ namespace lvh::detail::test {
   enum class BrokerServiceScenario {
     pipe_unavailable_once,
     pipe_never_available,
+    broker_not_installed,
+    broker_manager_access_denied,
+    broker_open_access_denied,
+    broker_marked_for_delete,
     pipe_access_denied,
     pipe_busy_once,
     pipe_busy_timeout_once,
@@ -37,6 +41,7 @@ namespace lvh::detail::test {
     std::uint32_t create_attempts = 0;
     std::uint32_t sleep_attempts = 0;
     std::uint32_t wait_attempts = 0;
+    std::uint32_t last_error = 0;
     bool transacted = false;
   };
 
